@@ -5,32 +5,37 @@
 
 package com.fran.flink.flink1;
 
+import java.util.Properties;
+
 import org.apache.flink.api.common.functions.*;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.streaming.connectors.kafka.FlinkKafkaConsumer010;
 import org.apache.flink.streaming.util.serialization.SimpleStringSchema;
 
-public class TimestampPort {
+public class TimestampKafka {
 
 	public static void main(String[] args) throws Exception {
 
 		if (args.length != 1){
-			System.err.println("USAGE:\nTimestampPort <port>");
+			System.err.println("USAGE:\nTimestampKafka <topic>");
 			return;
 		}
-
-		Integer port = Integer.parseInt(args[0]);
-
+		
 		final StreamExecutionEnvironment env = StreamExecutionEnvironment
 				.getExecutionEnvironment();
 
-		DataStream<String> lines = env.socketTextStream("localhost", port);
-
-		DataStream<String> lineTS = lines.map(new TimestampAdder());
+		Properties properties = new Properties();
+		properties.setProperty("bootstrap.servers", "192.168.0.155:9092");
+		FlinkKafkaConsumer010<String> myConsumer = new FlinkKafkaConsumer010<>(args[0], new SimpleStringSchema(), properties);
 		
-		lineTS.writeToSocket("localhost", 9998, new SimpleStringSchema());
+		DataStream<String> lines = env.addSource(myConsumer).setParallelism(2);
+		
+		DataStream<String> lineTS = lines.map(new TimestampAdder()).setParallelism(4);
+		
+		lineTS.writeToSocket("192.168.0.155", 9998, new SimpleStringSchema()).setParallelism(1);
 
-		env.execute("Java TimestampPort");
+		env.execute("TimestampKafka");
 	}
 
 	public static final class TimestampAdder implements MapFunction<String, String> {
@@ -39,10 +44,10 @@ public class TimestampPort {
 		public String map(String line) throws Exception {
 			String[] tuple = line.split(" ");
 			String totalTime = String.valueOf(System.currentTimeMillis() - Long.valueOf(tuple[1]));
-			String newLine = line.concat(" " + String.valueOf(System.currentTimeMillis()) + " " + totalTime + "\n");
+			String newLine = line.
+					concat(" " + String.valueOf(System.currentTimeMillis()) + " " + totalTime + "\n");
 			return newLine;
 		}
-
 	}
-
+	
 }
