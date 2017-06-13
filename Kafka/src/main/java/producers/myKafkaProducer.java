@@ -9,8 +9,6 @@
 package producers;
 
 import java.util.Properties;
-//import java.util.Random;
-import java.util.concurrent.locks.LockSupport;
 
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.Producer;
@@ -20,9 +18,8 @@ public class myKafkaProducer {
 
 	public static void main(String[] args) throws InterruptedException {
 		if (args.length != 3){
-			System.err.println("USAGE: KafkaProducer <topic> <ns> <linger.ms> <linger mode>");
+			System.err.println("USAGE: KafkaProducer <topic> <ns> <linger.ms>");
 			System.err.println("\t If <ns> = 0 --> Delay disabled");
-			System.err.println("\t <linger mode> = [BUSY|LOCK]");
 			return;
 		}
 		
@@ -59,28 +56,17 @@ public class myKafkaProducer {
 				producer.send(new ProducerRecord<String, String>(args[0], i++ + " " + 
 						Long.toString(System.currentTimeMillis())));
 			}
-		} else if (args[3].contains("BUSY")) {
+		} else {
 			//BUSY DELAY
 			@SuppressWarnings("resource")
 			Producer<String, String> producer = new KafkaProducer<>(props);
 			while(true) {
 				producer.send(new ProducerRecord<String, String>(args[0], i++ + " " + 
 						Long.toString(System.currentTimeMillis())));
-				//LockSupport.parkNanos(delayNS);
 
 				long start = System.nanoTime();
 				while (System.nanoTime() - start < delayNS);
 			}
-		} else if (args[3].contains("LOCK")) {
-			@SuppressWarnings("resource")
-			Producer<String, String> producer = new KafkaProducer<>(props);
-			while(true) {
-				producer.send(new ProducerRecord<String, String>(args[0], i++ + " " + 
-						Long.toString(System.currentTimeMillis())));
-				LockSupport.parkNanos(delayNS);
-			}
-		} else {
-			System.out.println("Something wrong");
 		}
 	}
 }

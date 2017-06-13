@@ -21,8 +21,6 @@ import org.apache.kafka.clients.consumer.KafkaConsumer;
 
 public class kafkaConsumerToFile {
 
-	static volatile boolean keepRunning = true;
-
 	public static void main(String[] args) throws IOException {
 		if (args.length != 2){
 			System.err.println("USAGE: KafkaConsumer <topic> <linesToFlush>");
