@@ -1,4 +1,12 @@
-package com.tfg.spark1.spark1;
+/**
+ * @author  	Francisco Robles Martin
+ * @date		June 2017
+ * @project 	Computer Science bachelor's final project:
+ * 				Comparison between Spark Streaming and Flink
+ * @university	Technical University of Madrid
+ */
+
+package port;
 
 import java.io.PrintWriter;
 import java.net.Socket;
@@ -15,34 +23,43 @@ import org.apache.spark.streaming.api.java.*;
 public final class TimestampPort {
 
 	public static void main(String[] args) throws Exception {
-		if (args.length < 1) {
-			System.err.println("Usage: TimestampPort <port> <batch-interval");
+		if (args.length != 2) {
+			System.err.println("Usage: TimestampPort <port> <batch-interval (ms)>");
+			System.err.println("\t <port> : port to read from");
 			System.exit(1);
 		}
 
-		SparkConf conf = new SparkConf().setMaster("spark://192.168.0.155:7077").setAppName("TimestampPort");
+		
+		//SPARK CONFIGURATION
+		SparkConf sparkConf = new SparkConf().setAppName("TimestampPort");
+		
 		@SuppressWarnings("resource")
-		JavaStreamingContext jssc = new JavaStreamingContext(conf, Durations.milliseconds(Integer.valueOf(args[1])));
+		JavaStreamingContext jStreamingContext = new JavaStreamingContext(sparkConf, 
+				Durations.milliseconds(Integer.valueOf(args[1])));
 
-		JavaReceiverInputDStream<String> lines = jssc.socketTextStream("localhost", Integer.valueOf(args[0]),StorageLevel.MEMORY_ONLY());		
+		
+		//MAIN PROGRAM
+		JavaReceiverInputDStream<String> line = jStreamingContext.socketTextStream("localhost", 
+				Integer.valueOf(args[0]), StorageLevel.MEMORY_ONLY());		
 
-		JavaDStream<String> lineTS = lines.map(new TimestampAdder());
+		JavaDStream<String> lineTS = line.map(new TimestampAdder());
 
 		lineTS.foreachRDD(new NetworkPublisher());
 
-		jssc.start();
-		jssc.awaitTermination();
+		jStreamingContext.start();
+		jStreamingContext.awaitTermination();
 	}
 
-	//Functions used in the program implementations:
-
+	
+	//Functions used in the program implementation:
+	
 	public static class TimestampAdder implements Function<String, String> {
 		private static final long serialVersionUID = 1L;
 
 		public String call(String line) {
-			String[] tuple = line.split(" ");
-			String totalTime = String.valueOf(System.currentTimeMillis() - Long.valueOf(tuple[1]));
-			String newLine = line.concat(" " + String.valueOf(System.currentTimeMillis()) + " " + totalTime);
+			Long currentTime = System.currentTimeMillis();
+			String totalTime = String.valueOf(currentTime - Long.valueOf(line.split(" ")[1]));
+			String newLine = line.concat(" " + String.valueOf(currentTime) + " " + totalTime);
 
 			return newLine;
 		}
