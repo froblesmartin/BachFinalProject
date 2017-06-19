@@ -33,6 +33,7 @@ public class TimestampKafka {
 				.getExecutionEnvironment();
 
 		env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime);
+		env.setParallelism(2);
 		
 		//KAFKA CONSUMER
 		Properties properties = new Properties();
@@ -55,15 +56,16 @@ public class TimestampKafka {
 		//MAIN PROGRAM
 		DataStream<String> lines = env.addSource(myConsumer);
 		
-		DataStream<String> lineTS = lines.map(new TimestampAdder()).rescale();
+		//Add timestamp and calculate the difference with the creation time
+		DataStream<String> lineTS = lines.map(new TimestampAdder());
 		
+		
+		//Send the result to Kafka
 		FlinkKafkaProducer010Configuration<String> myProducerConfig = (FlinkKafkaProducer010Configuration<String>) FlinkKafkaProducer010
-				.writeToKafkaWithTimestamps(lineTS, "testRes", new SimpleStringSchema(), producerConfig).setParallelism(2);
-		
+				.writeToKafkaWithTimestamps(lineTS, "testRes", new SimpleStringSchema(), producerConfig);
 		
 		myProducerConfig.setWriteTimestampToKafka(true);
 		
-		//lineTS.writeToSocket("192.168.0.155", 9998, new SimpleStringSchema()).setParallelism(1);
 
 		env.execute("TimestampKafka");
 	}

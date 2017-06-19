@@ -26,48 +26,81 @@ import scala.Tuple2;
 public final class TimestampLongPort {
 
 	public static void main(String[] args) throws Exception {
-		if (args.length != 2) {
+		if (args.length != 1) {
 			System.err.println("Usage: TimestampLongPort <port> <batch-interval (ms)>");
-			System.err.println("\t <port> : port to read from");
 			System.exit(1);
 		}
 
-		
+
 		//SPARK CONFIGURATION
 		SparkConf sparkConf = new SparkConf().setAppName("TimestampLongPort");
-		
+
 		@SuppressWarnings("resource")
 		JavaStreamingContext jStreamingContext = new JavaStreamingContext(sparkConf, 
 				Durations.milliseconds(Integer.valueOf(args[1])));
 
-		
+
 		//MAIN PROGRAM
 		JavaReceiverInputDStream<String> line = jStreamingContext.socketTextStream("localhost", 
-				Integer.valueOf(args[0]), StorageLevel.MEMORY_ONLY());		
+				9999, StorageLevel.MEMORY_ONLY());		
 
-		JavaDStream<String> windowedLine = line.window(Durations.seconds(5), Durations.seconds(4));
-		
-		JavaDStream<Tuple2<String, Integer>> wL_Num = windowedLine.map(new NumberAdder());
-				
-		JavaDStream<Tuple2<String, Integer>> wL_Num_Reduced = wL_Num.reduce(new Reducer());
-		
-		JavaDStream<String> wL_Num_Average = wL_Num_Reduced.map(new AverageCalculator());
-		
-		JavaDStream<String> wL_MulOf5 = windowedLine.filter(new Filter5());
-		
-		JavaDStream<String> wL_MulOf5_Count = wL_MulOf5.union(wL_Num_Average);
-		
-		JavaDStream<String> lineTS = wL_MulOf5_Count.map(new TimestampAdder());
-		
-		lineTS.foreachRDD(new NetworkPublisher());
+		//Add 1 to each line
+		JavaDStream<Tuple2<String, Integer>> line_Num = line.map(new NumberAdder());
+
+		//Filted Odd numbers
+		JavaDStream<Tuple2<String, Integer>> line_Num_Odd = line_Num.filter(new FilterOdd());
+
+		//Filter Even numbers
+		JavaDStream<Tuple2<String, Integer>> line_Num_Even = line_Num.filter(new FilterEven());
+
+		//Join Even and Odd
+		JavaDStream<Tuple2<String, Integer>> line_Num_U = line_Num_Odd.union(line_Num_Even);
+
+		//Tumbling windows every 2 seconds
+		JavaDStream<Tuple2<String, Integer>> windowedLine_Num_U = line_Num_U
+				.window(Durations.seconds(2), Durations.seconds(2));
+
+		//Reduce to one line with the sum
+		JavaDStream<Tuple2<String, Integer>> wL_Num_U_Reduced = windowedLine_Num_U.reduce(new Reducer());
+
+		//Calculate the average of the elements summed
+		JavaDStream<String> wL_Average = wL_Num_U_Reduced.map(new AverageCalculator());
+
+		//Add timestamp and calculate the difference with the average
+		JavaDStream<String> averageTS = wL_Average.map(new TimestampAdder());
+
+
+		//Send the result to the port 9998
+		averageTS.foreachRDD(new NetworkPublisher());
+
 
 		jStreamingContext.start();
 		jStreamingContext.awaitTermination();
 	}
 
-	
+
 	//Functions used in the program implementation:
-	
+
+	public static class FilterOdd implements Function<Tuple2<String, Integer>,Boolean> {
+		private static final long serialVersionUID = 1L;
+
+		public Boolean call(Tuple2<String, Integer> line) throws Exception {
+			Boolean isOdd = (Long.valueOf(line._1.split(" ")[0]) % 2) != 0;
+			return isOdd;
+		}
+	};
+
+
+	public static class FilterEven implements Function<Tuple2<String, Integer>,Boolean> {
+		private static final long serialVersionUID = 1L;
+
+		public Boolean call(Tuple2<String, Integer> line) throws Exception {
+			Boolean isEven = (Long.valueOf(line._1.split(" ")[0]) % 2) == 0;
+			return isEven;
+		}
+	};
+
+
 	public static class NumberAdder implements Function<String, Tuple2<String, Integer>> {
 		private static final long serialVersionUID = 1L;
 
@@ -76,8 +109,8 @@ public final class TimestampLongPort {
 			return newLine;
 		}
 	};
-	
-	
+
+
 	public static class Reducer implements Function2<Tuple2<String, Integer>, Tuple2<String, Integer>, Tuple2<String, Integer>> {
 		private static final long serialVersionUID = 1L;
 
@@ -88,31 +121,20 @@ public final class TimestampLongPort {
 					line1._2 + line2._2);
 			return newLine;
 		}
-		
-	}
-	
-	
+	};
+
+
 	public static class AverageCalculator implements Function<Tuple2<String, Integer>, String> {
 		private static final long serialVersionUID = 1L;
 
 		public String call(Tuple2<String, Integer> line) throws Exception {
 			Long average = Long.valueOf(line._1.split(" ")[1]) / line._2;
-			String result = line._1.split(" ")[0] + " " + String.valueOf(average);
+			String result = String.valueOf(line._2) + " " + String.valueOf(average);
 			return result;
 		}
 	};
-	
-	
-	public static class Filter5 implements Function<String,Boolean> {
-		private static final long serialVersionUID = 1L;
 
-		public Boolean call(String line) throws Exception {
-			Boolean multipleOf5 = (Integer.valueOf(line.split(" ")[0]) % 5 == 0);
-			return multipleOf5;
-		}
-	};
-	
-	
+
 	public static class TimestampAdder implements Function<String, String> {
 		private static final long serialVersionUID = 1L;
 
@@ -125,7 +147,7 @@ public final class TimestampLongPort {
 		}
 	};
 
-	
+
 	public static class NetworkPublisher implements VoidFunction<JavaRDD<String>> {
 		private static final long serialVersionUID = 1L;
 

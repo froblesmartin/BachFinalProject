@@ -10,8 +10,6 @@ package kafka;
 
 import java.util.Map;
 import java.util.Properties;
-import java.io.PrintWriter;
-import java.net.Socket;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
@@ -66,10 +64,13 @@ public final class TimestampKafka {
 		
 		//MAIN PROGRAM 
 		JavaDStream<String> line = message.map(new MapperKafka()).
-				persist(StorageLevel.MEMORY_ONLY()).repartition(4);
+				persist(StorageLevel.MEMORY_ONLY());
 
+		//Add timestamp and calculate the difference with the creation time
 		JavaDStream<String> lineTS = line.map(new TimestampAdder());
 
+		
+		//Send the result to Kafka
 		lineTS.foreachRDD(new KafkaPublisher());
 		
 		jStreamingContext.start();
@@ -100,6 +101,7 @@ public final class TimestampKafka {
 		}
 	};
 
+	
 	public static class KafkaPublisher implements VoidFunction<JavaRDD<String>> {
 		private static final long serialVersionUID = 1L;
 
@@ -130,22 +132,4 @@ public final class TimestampKafka {
 		}
 	};
 	
-	public static class NetworkPublisher implements VoidFunction<JavaRDD<String>> {
-		private static final long serialVersionUID = 1L;
-
-		public void call(JavaRDD<String> rdd) throws Exception {
-			rdd.foreachPartition(new VoidFunction<Iterator<String>>() {
-				private static final long serialVersionUID = 1L;
-
-				public void call(Iterator<String> partitionOfRecords) throws Exception {
-					Socket mySocket = new Socket("192.168.0.155", 9998);
-					final PrintWriter out = new PrintWriter(mySocket.getOutputStream(), true);
-					while(partitionOfRecords.hasNext()) {
-						out.println(partitionOfRecords.next());
-					}
-					mySocket.close();
-				}
-			});
-		}
-	};
 }

@@ -16,10 +16,11 @@ import org.apache.flink.streaming.util.serialization.SimpleStringSchema;
 public class TimestampPort {
 
 	public static void main(String[] args) throws Exception {
-		if (args.length != 1){
-			System.err.println("USAGE: TimestampPort <port>");
-			return;
-		}
+
+//		if (args.length != 1){
+//			System.err.println("USAGE: TimestampPort <port>");
+//			return;
+//		}
 
 		
 		//FLINK CONFIGURATION
@@ -28,11 +29,13 @@ public class TimestampPort {
 
 		
 		//MAIN PROGRAM
-		Integer port = Integer.parseInt(args[0]);
-		DataStream<String> lines = env.socketTextStream("localhost", port);
+		DataStream<String> lines = env.socketTextStream("localhost", 9999);
 
+		//Add timestamp and calculate the difference with the creation time
 		DataStream<String> lineTS = lines.map(new TimestampAdder());
 		
+		lineTS.print();
+		//Send the result to port 9998
 		lineTS.writeToSocket("localhost", 9998, new SimpleStringSchema());
 
 		env.execute("TimestampPort");
@@ -47,7 +50,7 @@ public class TimestampPort {
 		public String map(String line) throws Exception {
 			Long currentTime = System.currentTimeMillis();
 			String totalTime = String.valueOf(currentTime - Long.valueOf(line.split(" ")[1]));
-			String newLine = line.concat(" " + String.valueOf(currentTime) + " " + totalTime);
+			String newLine = line.concat(" " + String.valueOf(currentTime) + " " + totalTime + "\n");
 
 			return newLine;
 		}

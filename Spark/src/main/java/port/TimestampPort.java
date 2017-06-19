@@ -23,9 +23,8 @@ import org.apache.spark.streaming.api.java.*;
 public final class TimestampPort {
 
 	public static void main(String[] args) throws Exception {
-		if (args.length != 2) {
-			System.err.println("Usage: TimestampPort <port> <batch-interval (ms)>");
-			System.err.println("\t <port> : port to read from");
+		if (args.length != 1) {
+			System.err.println("Usage: TimestampPort <batch-interval (ms)>");
 			System.exit(1);
 		}
 
@@ -40,10 +39,13 @@ public final class TimestampPort {
 		
 		//MAIN PROGRAM
 		JavaReceiverInputDStream<String> line = jStreamingContext.socketTextStream("localhost", 
-				Integer.valueOf(args[0]), StorageLevel.MEMORY_ONLY());		
+				9999, StorageLevel.MEMORY_ONLY());		
 
+		//Add timestamp and calculate the difference with the creation time
 		JavaDStream<String> lineTS = line.map(new TimestampAdder());
 
+		
+		//Send the result to port 9998
 		lineTS.foreachRDD(new NetworkPublisher());
 
 		jStreamingContext.start();

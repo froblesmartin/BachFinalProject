@@ -14,23 +14,24 @@ import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 
-public class myKafkaProducer {
+public class MyKafkaProducer {
 
 	public static void main(String[] args) throws InterruptedException {
-		if (args.length != 3){
-			System.err.println("USAGE: KafkaProducer <topic> <ns> <linger.ms>");
-			System.err.println("\t If <ns> = 0 --> Delay disabled");
+		if (args.length != 4){
+			System.err.println("USAGE: MyKafkaProducer <topic> <delay (ns)> <linger.ms> <batch-size>");
+			System.err.println("\t If <delay (ns)> = 0 --> Delay disabled");
 			return;
 		}
 		
 		
 		//KAFKA PRODUCER CONFIGURATION
 		int batch_size = 16384;
-		//		if (args.length == 4) {
-		//			batch_size = Integer.valueOf(args[3]);
-		//		}
+		if (args.length == 4) {
+			batch_size = Integer.valueOf(args[3]);
+		}
 
 		Properties props = new Properties();
+		//props.put("bootstrap.servers", "localhost:9092");  for using in the same machine and override network usage
 		props.put("bootstrap.servers", "192.168.0.155:9092");
 		props.put("acks", "0");
 		props.put("retries", 0);
