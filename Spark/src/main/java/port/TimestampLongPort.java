@@ -12,22 +12,26 @@ import java.io.PrintWriter;
 import java.net.Socket;
 import java.util.Iterator;
 
+import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.spark.SparkConf;
 import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.api.java.function.Function;
 import org.apache.spark.api.java.function.Function2;
+import org.apache.spark.api.java.function.PairFunction;
 import org.apache.spark.api.java.function.VoidFunction;
 import org.apache.spark.storage.StorageLevel;
 import org.apache.spark.streaming.Durations;
 import org.apache.spark.streaming.api.java.*;
 
 import scala.Tuple2;
+import scala.Tuple3;
 
 public final class TimestampLongPort {
 
 	public static void main(String[] args) throws Exception {
-		if (args.length != 1) {
-			System.err.println("Usage: TimestampLongPort <port> <batch-interval (ms)>");
+		if (args.length != 2) {
+			System.err.println("Usage: TimestampLongPort <batch-interval (ms)> <checkpointing>");
+			System.err.println("\t <checkpointing>: [0|1]");
 			System.exit(1);
 		}
 
@@ -37,8 +41,11 @@ public final class TimestampLongPort {
 
 		@SuppressWarnings("resource")
 		JavaStreamingContext jStreamingContext = new JavaStreamingContext(sparkConf, 
-				Durations.milliseconds(Integer.valueOf(args[1])));
+				Durations.milliseconds(Integer.valueOf(args[0])));
 
+		if (Integer.valueOf(args[1]) == 1) { 
+			jStreamingContext.checkpoint("file:///home/fran/nfs/nfs/checkpoints/spark");
+		}
 
 		//MAIN PROGRAM
 		JavaReceiverInputDStream<String> line = jStreamingContext.socketTextStream("localhost", 
@@ -47,21 +54,27 @@ public final class TimestampLongPort {
 		//Add 1 to each line
 		JavaDStream<Tuple2<String, Integer>> line_Num = line.map(new NumberAdder());
 
-		//Filted Odd numbers
+		//Filter Odd numbers
 		JavaDStream<Tuple2<String, Integer>> line_Num_Odd = line_Num.filter(new FilterOdd());
+		JavaDStream<Tuple3<String, String, Integer>> line_Num_Odd_2 = line_Num_Odd.map(new OddAdder());
 
 		//Filter Even numbers
 		JavaDStream<Tuple2<String, Integer>> line_Num_Even = line_Num.filter(new FilterEven());
+		JavaDStream<Tuple3<String, String, Integer>> line_Num_Even_2 = line_Num_Even.map(new EvenAdder());
 
 		//Join Even and Odd
-		JavaDStream<Tuple2<String, Integer>> line_Num_U = line_Num_Odd.union(line_Num_Even);
+		JavaDStream<Tuple3<String, String, Integer>> line_Num_U = line_Num_Odd_2.union(line_Num_Even_2);
+
+		//Change to JavaPairDStream
+		JavaPairDStream<String, Tuple2<String, Integer>> line_Num_U_K = line_Num_U.mapToPair(new Keyer());
 
 		//Tumbling windows every 2 seconds
-		JavaDStream<Tuple2<String, Integer>> windowedLine_Num_U = line_Num_U
+		JavaPairDStream<String, Tuple2<String, Integer>> windowedLine_Num_U_K = line_Num_U_K
 				.window(Durations.seconds(2), Durations.seconds(2));
 
 		//Reduce to one line with the sum
-		JavaDStream<Tuple2<String, Integer>> wL_Num_U_Reduced = windowedLine_Num_U.reduce(new Reducer());
+		JavaDStream<Tuple2<String, Tuple2<String, Integer>>> wL_Num_U_Reduced = windowedLine_Num_U_K.reduceByKey(new Reducer())
+				.toJavaDStream();
 
 		//Calculate the average of the elements summed
 		JavaDStream<String> wL_Average = wL_Num_U_Reduced.map(new AverageCalculator());
@@ -81,6 +94,38 @@ public final class TimestampLongPort {
 
 	//Functions used in the program implementation:
 
+	public static class OddAdder implements Function<Tuple2<String, Integer>, Tuple3<String, String, Integer>> {
+		private static final long serialVersionUID = 1L;
+
+		public Tuple3<String, String, Integer> call(Tuple2<String, Integer> line) throws Exception {
+			Tuple3<String, String, Integer> newLine = new Tuple3<String, String, Integer>(line._1, "odd", line._2);
+			return newLine;
+		}
+	};
+	
+	
+	public static class EvenAdder implements Function<Tuple2<String, Integer>, Tuple3<String, String, Integer>> {
+		private static final long serialVersionUID = 1L;
+
+		public Tuple3<String, String, Integer> call(Tuple2<String, Integer> line) throws Exception {
+			Tuple3<String, String, Integer> newLine = new Tuple3<String, String, Integer>(line._1, "even", line._2);
+			return newLine;
+		}
+	};
+	
+	
+	public static class Keyer implements PairFunction<Tuple3<String, String, Integer>, String, Tuple2<String, Integer>> {
+		private static final long serialVersionUID = 1L;
+
+		public Tuple2<String, Tuple2<String, Integer>> call(Tuple3<String, String, Integer> line) throws Exception {
+			
+			Tuple2<String, Tuple2<String, Integer>> newLine = new Tuple2<String, Tuple2<String, Integer>>(line._2(), 
+					new Tuple2<String, Integer>(line._1(), line._3()));
+			return newLine;
+		}
+	};
+	
+	
 	public static class FilterOdd implements Function<Tuple2<String, Integer>,Boolean> {
 		private static final long serialVersionUID = 1L;
 
@@ -97,6 +142,15 @@ public final class TimestampLongPort {
 		public Boolean call(Tuple2<String, Integer> line) throws Exception {
 			Boolean isEven = (Long.valueOf(line._1.split(" ")[0]) % 2) == 0;
 			return isEven;
+		}
+	};
+
+
+	public static class MapperKafka implements Function<ConsumerRecord<String, String>, String> {
+		private static final long serialVersionUID = 1L;
+
+		public String call(ConsumerRecord<String, String> record) throws Exception {
+			return record.value().toString();
 		}
 	};
 
@@ -124,12 +178,12 @@ public final class TimestampLongPort {
 	};
 
 
-	public static class AverageCalculator implements Function<Tuple2<String, Integer>, String> {
+	public static class AverageCalculator implements Function<Tuple2<String, Tuple2<String, Integer>>, String> {
 		private static final long serialVersionUID = 1L;
 
-		public String call(Tuple2<String, Integer> line) throws Exception {
-			Long average = Long.valueOf(line._1.split(" ")[1]) / line._2;
-			String result = String.valueOf(line._2) + " " + String.valueOf(average);
+		public String call(Tuple2<String, Tuple2<String, Integer>> line) throws Exception {
+			Long average = Long.valueOf(line._2._1.split(" ")[1]) / line._2._2;
+			String result = String.valueOf(line._2._2) + " " + String.valueOf(average);
 			return result;
 		}
 	};

@@ -38,8 +38,9 @@ import org.apache.spark.streaming.api.java.*;
 public final class TimestampLongKafka {
 
 	public static void main(String[] args) throws Exception {
-		if (args.length != 2) {
-			System.err.println("Usage: TimestampLongKafka <topics> <batch-interval (ms)>");
+		if (args.length != 3) {
+			System.err.println("Usage: TimestampLongKafka <topics> <batch-interval (ms)> <checkpointing>");
+			System.err.println("\t <checkpointing>: [0|1]");
 			System.exit(1);
 		}
 
@@ -49,6 +50,9 @@ public final class TimestampLongKafka {
 		JavaStreamingContext jStreamingContext = new JavaStreamingContext(sparkConf, 
 				Durations.milliseconds(Integer.valueOf(args[1])));
 
+		if (Integer.valueOf(args[2]) == 1) { 
+			jStreamingContext.checkpoint("file:///home/fran/nfs/nfs/checkpoints/spark");
+		}
 
 		//KAFKA CONSUMER CONFIGURATION
 		Map<String, Object> kafkaParams = new HashMap<>();

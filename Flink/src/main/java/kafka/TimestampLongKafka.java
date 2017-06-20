@@ -14,6 +14,8 @@ import org.apache.flink.api.common.functions.*;
 import org.apache.flink.api.java.tuple.Tuple;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.api.java.tuple.Tuple3;
+import org.apache.flink.runtime.state.filesystem.FsStateBackend;
+import org.apache.flink.streaming.api.CheckpointingMode;
 import org.apache.flink.streaming.api.TimeCharacteristic;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.datastream.KeyedStream;
@@ -22,6 +24,7 @@ import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.windowing.assigners.TumblingProcessingTimeWindows;
 import org.apache.flink.streaming.api.windowing.time.Time;
 import org.apache.flink.streaming.api.windowing.windows.TimeWindow;
+
 import org.apache.flink.streaming.connectors.kafka.FlinkKafkaConsumer010;
 import org.apache.flink.streaming.connectors.kafka.FlinkKafkaProducer010;
 import org.apache.flink.streaming.connectors.kafka.FlinkKafkaProducer010.FlinkKafkaProducer010Configuration;
@@ -30,8 +33,9 @@ import org.apache.flink.streaming.util.serialization.SimpleStringSchema;
 public class TimestampLongKafka {
 
 	public static void main(String[] args) throws Exception {
-		if (args.length != 1){
-			System.err.println("USAGE: TimestampLongKafka <topic>");
+		if (args.length != 3){
+			System.err.println("USAGE: TimestampLongKafka <topic> <checkpointing> <checkpointing time (ms)>");
+			System.err.println("\t <checkpointing>: [0|1]");
 			return;
 		}
 
@@ -41,7 +45,14 @@ public class TimestampLongKafka {
 				.getExecutionEnvironment();
 
 		env.setStreamTimeCharacteristic(TimeCharacteristic.ProcessingTime);
-		env.setParallelism(4);
+		env.setParallelism(8);
+		
+		if (Integer.valueOf(args[1]) == 1) { 
+			env.enableCheckpointing(Integer.valueOf(args[2]));
+			env.getCheckpointConfig().setCheckpointingMode(CheckpointingMode.EXACTLY_ONCE);
+			env.getCheckpointConfig().setMaxConcurrentCheckpoints(1);
+			env.setStateBackend(new FsStateBackend("file:///home/fran/nfs/nfs/checkpoints/flink"));
+		}
 		
 		//KAFKA CONSUMER CONFIGURATION
 		Properties properties = new Properties();
@@ -53,12 +64,7 @@ public class TimestampLongKafka {
 		Properties producerConfig = new Properties();
 		producerConfig.setProperty("bootstrap.servers", "192.168.0.155:9092");
 		producerConfig.setProperty("acks", "all");
-		//producerConfig.put("retries", 0);
-		//producerConfig.put("batch.size", 16384);
 		producerConfig.setProperty("linger.ms", "0");
-		//producerConfig.put("buffer.memory", 33554432);
-		//producerConfig.put("key.serializer", "org.apache.kafka.common.serialization.StringSerializer");
-		//producerConfig.put("value.serializer", "org.apache.kafka.common.serialization.StringSerializer");
 
 		
 		//MAIN PROGRAM
