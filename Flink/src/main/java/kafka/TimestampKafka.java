@@ -11,6 +11,8 @@ package kafka;
 import java.util.Properties;
 
 import org.apache.flink.api.common.functions.*;
+import org.apache.flink.runtime.state.filesystem.FsStateBackend;
+import org.apache.flink.streaming.api.CheckpointingMode;
 import org.apache.flink.streaming.api.TimeCharacteristic;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
@@ -22,8 +24,9 @@ import org.apache.flink.streaming.util.serialization.SimpleStringSchema;
 public class TimestampKafka {
 
 	public static void main(String[] args) throws Exception {
-		if (args.length != 1){
-			System.err.println("USAGE: TimestampKafka <topic>");
+		if (args.length != 3){
+			System.err.println("USAGE: TimestampKafka <topic> <checkpointing> <checkpointing time (ms)>");
+			System.err.println("\t <checkpointing>: [0|1]");
 			return;
 		}
 		
@@ -32,7 +35,15 @@ public class TimestampKafka {
 		final StreamExecutionEnvironment env = StreamExecutionEnvironment
 				.getExecutionEnvironment();
 
-		env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime);
+		env.setStreamTimeCharacteristic(TimeCharacteristic.ProcessingTime);
+		env.setParallelism(8);
+		
+		if (Integer.valueOf(args[1]) == 1) { 
+			env.enableCheckpointing(Integer.valueOf(args[2]));
+			env.getCheckpointConfig().setCheckpointingMode(CheckpointingMode.EXACTLY_ONCE);
+			env.getCheckpointConfig().setMaxConcurrentCheckpoints(1);
+			env.setStateBackend(new FsStateBackend("file:///home/fran/nfs/nfs/checkpoints/flink"));
+		}
 		
 		//KAFKA CONSUMER
 		Properties properties = new Properties();
@@ -43,27 +54,24 @@ public class TimestampKafka {
 		//KAFKA PRODUCER
 		Properties producerConfig = new Properties();
 		producerConfig.setProperty("bootstrap.servers", "192.168.0.155:9092");
-		producerConfig.setProperty("acks", "0");
-		//producerConfig.put("retries", 0);
-		//producerConfig.put("batch.size", 16384);
+		producerConfig.setProperty("acks", "all");
 		producerConfig.setProperty("linger.ms", "0");
-		//producerConfig.put("buffer.memory", 33554432);
-		//producerConfig.put("key.serializer", "org.apache.kafka.common.serialization.StringSerializer");
-		//producerConfig.put("value.serializer", "org.apache.kafka.common.serialization.StringSerializer");
 		
 		
 		//MAIN PROGRAM
+		//Read from Kafka
 		DataStream<String> lines = env.addSource(myConsumer);
 		
-		DataStream<String> lineTS = lines.map(new TimestampAdder()).rescale();
+		//Add timestamp and calculate the difference with the creation time
+		DataStream<String> lineTS = lines.map(new TimestampAdder());
 		
+		
+		//Send the result to Kafka
 		FlinkKafkaProducer010Configuration<String> myProducerConfig = (FlinkKafkaProducer010Configuration<String>) FlinkKafkaProducer010
-				.writeToKafkaWithTimestamps(lineTS, "testRes", new SimpleStringSchema(), producerConfig).setParallelism(2);
-		
+				.writeToKafkaWithTimestamps(lineTS, "testRes", new SimpleStringSchema(), producerConfig);
 		
 		myProducerConfig.setWriteTimestampToKafka(true);
 		
-		//lineTS.writeToSocket("192.168.0.155", 9998, new SimpleStringSchema()).setParallelism(1);
 
 		env.execute("TimestampKafka");
 	}

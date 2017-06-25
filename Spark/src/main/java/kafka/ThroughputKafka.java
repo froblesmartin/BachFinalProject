@@ -35,7 +35,7 @@ import org.apache.spark.storage.StorageLevel;
 import org.apache.spark.streaming.Durations;
 import org.apache.spark.streaming.api.java.*;
 
-public final class TimestampLongKafka {
+public final class ThroughputKafka {
 
 	public static void main(String[] args) throws Exception {
 		if (args.length != 3) {
@@ -46,13 +46,14 @@ public final class TimestampLongKafka {
 
 
 		//SPARK CONFIGURATION
-		SparkConf sparkConf = new SparkConf().setAppName("TimestampLongKafka");
+		SparkConf sparkConf = new SparkConf().setAppName("ThroughputKafka");
 		JavaStreamingContext jStreamingContext = new JavaStreamingContext(sparkConf, 
 				Durations.milliseconds(Integer.valueOf(args[1])));
-
+		
 		if (Integer.valueOf(args[2]) == 1) { 
 			jStreamingContext.checkpoint("file:///home/fran/nfs/nfs/checkpoints/spark");
 		}
+
 
 		//KAFKA CONSUMER CONFIGURATION
 		Map<String, Object> kafkaParams = new HashMap<>();
@@ -65,46 +66,57 @@ public final class TimestampLongKafka {
 
 		Collection<String> topics = Arrays.asList(args[0].split(","));
 
-		final JavaInputDStream<ConsumerRecord<String, String>> message =
+		JavaInputDStream<ConsumerRecord<String, String>> message =
 				KafkaUtils.createDirectStream(jStreamingContext, LocationStrategies.PreferConsistent(),
 						ConsumerStrategies.<String, String>Subscribe(topics, kafkaParams));
 
 
 		//MAIN PROGRAM
-		JavaDStream<String> line = message.map(new MapperKafka()).
-				persist(StorageLevel.MEMORY_ONLY());
+		JavaDStream<String> line = message.map(new MapperKafka())
+				.persist(StorageLevel.MEMORY_ONLY());
+
+		//JavaDStream<String> lineToPrint = line.map(new TimestampAdder());
+		//lineToPrint.print();
+
+		/*
+		 * This part is just to consume CPU as all the changes results in nothing in the end
+		 */
+		JavaDStream<String> lineSum = line.map(new WhileSumAllNumbers());
+
+		JavaDStream<String> line2 = lineSum.map(new RemoveSumAllNumbers());
+
 
 		//Add 1 to each line
-		JavaDStream<Tuple2<String, Integer>> line_Num = line.map(new NumberAdder());
-		
+		JavaDStream<Tuple2<String, Integer>> line_Num = line2.map(new NumberAdder());
+
 		//Filter Odd numbers
 		JavaDStream<Tuple2<String, Integer>> line_Num_Odd = line_Num.filter(new FilterOdd());
 		JavaDStream<Tuple3<String, String, Integer>> line_Num_Odd_2 = line_Num_Odd.map(new OddAdder());
-		
+
 		//Filter Even numbers
 		JavaDStream<Tuple2<String, Integer>> line_Num_Even = line_Num.filter(new FilterEven());
 		JavaDStream<Tuple3<String, String, Integer>> line_Num_Even_2 = line_Num_Even.map(new EvenAdder());
-		
+
 		//Join Even and Odd
 		JavaDStream<Tuple3<String, String, Integer>> line_Num_U = line_Num_Odd_2.union(line_Num_Even_2);
-		
+
 		//Change to JavaPairDStream
 		JavaPairDStream<String, Tuple2<String, Integer>> line_Num_U_K = line_Num_U.mapToPair(new Keyer());
-		
+
 		//Tumbling windows every 2 seconds
 		JavaPairDStream<String, Tuple2<String, Integer>> windowedLine_Num_U_K = line_Num_U_K
-				.window(Durations.seconds(2), Durations.seconds(2));
-		
+				.window(Durations.seconds(10), Durations.seconds(10));
+
 		//Reduce to one line with the sum
 		JavaDStream<Tuple2<String, Tuple2<String, Integer>>> wL_Num_U_Reduced = windowedLine_Num_U_K.reduceByKey(new Reducer())
 				.toJavaDStream();
-		
+
 		//Calculate the average of the elements summed
 		JavaDStream<String> wL_Average = wL_Num_U_Reduced.map(new AverageCalculator());
-		
+
 		//Add timestamp and calculate the difference with the average
 		JavaDStream<String> averageTS = wL_Average.map(new TimestampAdder());
-		
+
 
 		//Send the result to Kafka
 		averageTS.foreachRDD(new KafkaPublisher());
@@ -117,6 +129,32 @@ public final class TimestampLongKafka {
 
 	//Functions used in the program implementation:
 
+	public static class WhileSumAllNumbers implements Function<String, String> {
+		private static final long serialVersionUID = 1L;
+
+		public String call(String line) {
+			int sumNumbers = 0;
+			for (int i = 1; i <= line.length(); i++) {
+				if (line.substring(i-1, i).matches("[-+]?\\d*\\.?\\d+")) {
+					sumNumbers += Integer.valueOf(line.substring(i-1, i));
+				}
+			}
+			String newLine = line.concat(" " + String.valueOf(sumNumbers));
+			return newLine;
+		}
+	};
+
+
+	public static class RemoveSumAllNumbers implements Function<String, String> {
+		private static final long serialVersionUID = 1L;
+
+		public String call(String line) {
+			String newLine = line.split(" ")[0] + " " + line.split(" ")[1];
+			return newLine;
+		}
+	};
+
+	
 	public static class OddAdder implements Function<Tuple2<String, Integer>, Tuple3<String, String, Integer>> {
 		private static final long serialVersionUID = 1L;
 
@@ -254,5 +292,4 @@ public final class TimestampLongKafka {
 			});
 		}
 	};
-
 }

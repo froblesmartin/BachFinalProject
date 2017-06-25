@@ -19,7 +19,7 @@ import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 
-public class kafkaConsumerToFile {
+public class KafkaConsumerToFile {
 
 	public static void main(String[] args) throws IOException {
 		if (args.length != 2){
@@ -31,7 +31,8 @@ public class kafkaConsumerToFile {
 		
 		//KAFKA CONSUMER PROPERTIES
 		Properties props = new Properties();
-		props.put("bootstrap.servers", "192.168.0.155:9092");
+		props.put("bootstrap.servers", "localhost:9092");
+		//props.put("bootstrap.servers", "192.168.0.155:9092");
 		props.put("group.id", "test");
 		props.put("enable.auto.commit", "true");
 		props.put("auto.commit.interval.ms", "1000");
@@ -42,6 +43,7 @@ public class kafkaConsumerToFile {
 		
 		//VARIABLES
 		long diff = 0;
+		//long diff2 = 0;
 		File f = new File("/home/fran/nfs/nfs/latency.txt");
 		int flush = Integer.valueOf(args[1]);
 		int flushWaiter = 0;
@@ -59,9 +61,10 @@ public class kafkaConsumerToFile {
 			ConsumerRecords<String, String> records = consumer.poll(100);
 			
 			for (ConsumerRecord<String, String> record : records) {
-				
+				//diff2 = System.currentTimeMillis() - record.timestamp();
 				diff = record.timestamp() - Long.valueOf(record.value().split(" ")[1]);
-				bw.append(record.value() + " " + record.timestamp() + " " +  diff +  "\n");
+				//bw.append(record.value() + " " + record.timestamp() + " " +  diff + " " + diff2 + "\n");
+				bw.append(record.value() + " " + record.timestamp() + " " +  diff + "\n");
 				flushWaiter++;
 				
 				if (flushWaiter == flush) {

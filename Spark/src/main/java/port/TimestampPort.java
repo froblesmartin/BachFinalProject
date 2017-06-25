@@ -24,35 +24,41 @@ public final class TimestampPort {
 
 	public static void main(String[] args) throws Exception {
 		if (args.length != 2) {
-			System.err.println("Usage: TimestampPort <port> <batch-interval (ms)>");
-			System.err.println("\t <port> : port to read from");
+			System.err.println("Usage: TimestampPort <batch-interval (ms)> <checkpointing>");
+			System.err.println("\t <checkpointing>: [0|1]");
 			System.exit(1);
 		}
 
-		
+
 		//SPARK CONFIGURATION
 		SparkConf sparkConf = new SparkConf().setAppName("TimestampPort");
-		
+
 		@SuppressWarnings("resource")
 		JavaStreamingContext jStreamingContext = new JavaStreamingContext(sparkConf, 
-				Durations.milliseconds(Integer.valueOf(args[1])));
+				Durations.milliseconds(Integer.valueOf(args[0])));
 
-		
+		if (Integer.valueOf(args[1]) == 1) { 
+			jStreamingContext.checkpoint("file:///home/fran/nfs/nfs/checkpoints/spark");
+		}
+
 		//MAIN PROGRAM
 		JavaReceiverInputDStream<String> line = jStreamingContext.socketTextStream("localhost", 
-				Integer.valueOf(args[0]), StorageLevel.MEMORY_ONLY());		
+				9999, StorageLevel.MEMORY_ONLY());		
 
+		//Add timestamp and calculate the difference with the creation time
 		JavaDStream<String> lineTS = line.map(new TimestampAdder());
 
+
+		//Send the result to port 9998
 		lineTS.foreachRDD(new NetworkPublisher());
 
 		jStreamingContext.start();
 		jStreamingContext.awaitTermination();
 	}
 
-	
+
 	//Functions used in the program implementation:
-	
+
 	public static class TimestampAdder implements Function<String, String> {
 		private static final long serialVersionUID = 1L;
 

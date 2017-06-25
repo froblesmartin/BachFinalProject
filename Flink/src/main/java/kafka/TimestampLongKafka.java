@@ -11,16 +11,31 @@ package kafka;
 import java.util.Properties;
 
 import org.apache.flink.api.common.functions.*;
+import org.apache.flink.api.java.tuple.Tuple;
+import org.apache.flink.api.java.tuple.Tuple2;
+import org.apache.flink.api.java.tuple.Tuple3;
+import org.apache.flink.runtime.state.filesystem.FsStateBackend;
+import org.apache.flink.streaming.api.CheckpointingMode;
+import org.apache.flink.streaming.api.TimeCharacteristic;
 import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.streaming.api.datastream.KeyedStream;
+import org.apache.flink.streaming.api.datastream.WindowedStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.streaming.api.windowing.assigners.TumblingProcessingTimeWindows;
+import org.apache.flink.streaming.api.windowing.time.Time;
+import org.apache.flink.streaming.api.windowing.windows.TimeWindow;
+
 import org.apache.flink.streaming.connectors.kafka.FlinkKafkaConsumer010;
+import org.apache.flink.streaming.connectors.kafka.FlinkKafkaProducer010;
+import org.apache.flink.streaming.connectors.kafka.FlinkKafkaProducer010.FlinkKafkaProducer010Configuration;
 import org.apache.flink.streaming.util.serialization.SimpleStringSchema;
 
 public class TimestampLongKafka {
 
 	public static void main(String[] args) throws Exception {
-		if (args.length != 1){
-			System.err.println("USAGE: TimestampLongKafka <topic>");
+		if (args.length != 3){
+			System.err.println("USAGE: TimestampLongKafka <topic> <checkpointing> <checkpointing time (ms)>");
+			System.err.println("\t <checkpointing>: [0|1]");
 			return;
 		}
 
@@ -29,25 +44,69 @@ public class TimestampLongKafka {
 		final StreamExecutionEnvironment env = StreamExecutionEnvironment
 				.getExecutionEnvironment();
 
+		env.setStreamTimeCharacteristic(TimeCharacteristic.ProcessingTime);
+		env.setParallelism(8);
+		
+		if (Integer.valueOf(args[1]) == 1) { 
+			env.enableCheckpointing(Integer.valueOf(args[2]));
+			env.getCheckpointConfig().setCheckpointingMode(CheckpointingMode.EXACTLY_ONCE);
+			env.getCheckpointConfig().setMaxConcurrentCheckpoints(1);
+			env.setStateBackend(new FsStateBackend("file:///home/fran/nfs/nfs/checkpoints/flink"));
+		}
 		
 		//KAFKA CONSUMER CONFIGURATION
 		Properties properties = new Properties();
 		properties.setProperty("bootstrap.servers", "192.168.0.155:9092");
 		FlinkKafkaConsumer010<String> myConsumer = new FlinkKafkaConsumer010<>(args[0], new SimpleStringSchema(), properties);
+		
+		
+		//KAFKA PRODUCER
+		Properties producerConfig = new Properties();
+		producerConfig.setProperty("bootstrap.servers", "192.168.0.155:9092");
+		producerConfig.setProperty("acks", "all");
+		producerConfig.setProperty("linger.ms", "0");
 
 		
 		//MAIN PROGRAM
-		DataStream<String> lines = env.addSource(myConsumer).setParallelism(4);
+		//Read from Kafka
+		DataStream<String> line = env.addSource(myConsumer);
 
-		DataStream<String> lines11 = lines.filter(new Filter11()).setParallelism(4);
+		//Add 1 to each line
+		DataStream<Tuple2<String, Integer>> line_Num = line.map(new NumberAdder());
+		
+		//Filter Odd numbers
+		DataStream<Tuple2<String, Integer>> line_Num_Odd = line_Num.filter(new FilterOdd());
+		DataStream<Tuple3<String, String, Integer>> line_Num_Odd_2 = line_Num_Odd.map(new OddAdder());
+		
+		//Filter Even numbers
+		DataStream<Tuple2<String, Integer>> line_Num_Even = line_Num.filter(new FilterEven());
+		DataStream<Tuple3<String, String, Integer>> line_Num_Even_2 = line_Num_Even.map(new EvenAdder());
+		
+		//Join Even and Odd
+		DataStream<Tuple3<String, String, Integer>> line_Num_U = line_Num_Odd_2.union(line_Num_Even_2);
+		
+		//Change to KeyedStream
+		KeyedStream<Tuple3<String, String, Integer>, Tuple> line_Num_U_K = line_Num_U.keyBy(1);
+		
+		//Tumbling windows every 2 seconds
+		WindowedStream<Tuple3<String, String, Integer>, Tuple, TimeWindow> windowedLine_Num_U_K = line_Num_U_K
+				.window(TumblingProcessingTimeWindows.of(Time.seconds(2)));
+		
+		//Reduce to one line with the sum
+		DataStream<Tuple3<String, String, Integer>> wL_Num_U_Reduced = windowedLine_Num_U_K.reduce(new Reducer());
+		
+		//Calculate the average of the elements summed
+		DataStream<String> wL_Average = wL_Num_U_Reduced.map(new AverageCalculator());
+		
+		//Add timestamp and calculate the difference with the average
+		DataStream<String> averageTS = wL_Average.map(new TimestampAdder());
+		
 
-		DataStream<String> lines00 = lines.filter(new Filter00()).setParallelism(4);
-
-		DataStream<String> lines00and11 = lines00.union(lines11);
-
-		DataStream<String> lineTS = lines00and11.map(new TimestampAdder()).setParallelism(4);
-
-		lineTS.writeToSocket("192.168.0.155", 9998, new SimpleStringSchema()).setParallelism(4);
+		//Send the result to Kafka
+		FlinkKafkaProducer010Configuration<String> myProducerConfig = (FlinkKafkaProducer010Configuration<String>) FlinkKafkaProducer010
+				.writeToKafkaWithTimestamps(averageTS, "testRes", new SimpleStringSchema(), producerConfig);
+		
+		myProducerConfig.setWriteTimestampToKafka(true);
 
 		env.execute("TimestampLongKafka");
 	}
@@ -55,27 +114,80 @@ public class TimestampLongKafka {
 	
 	//Functions used in the program implementation:
 	
-	public static final class Filter11 implements FilterFunction<String> {
+	public static class OddAdder implements MapFunction<Tuple2<String, Integer>, Tuple3<String, String, Integer>> {
 		private static final long serialVersionUID = 1L;
 
-		public boolean filter(String line) throws Exception {
-			String[] tuple = line.split(" ");
-			Boolean is11 = (Integer.valueOf(tuple[0]) == 11);
-			return is11;
+		public Tuple3<String, String, Integer> map(Tuple2<String, Integer> line) throws Exception {
+			Tuple3<String, String, Integer> newLine = new Tuple3<String, String, Integer>(line.f0, "odd", line.f1);
+			return newLine;
 		}
-	}
-
+	};
 	
-	public static final class Filter00 implements FilterFunction<String> {
+	
+	public static class EvenAdder implements MapFunction<Tuple2<String, Integer>, Tuple3<String, String, Integer>> {
 		private static final long serialVersionUID = 1L;
 
-		public boolean filter(String line) throws Exception {
-			String[] tuple = line.split(" ");
-			Boolean is00 = (Integer.valueOf(tuple[0]) == 00);
-			return is00;
+		public Tuple3<String, String, Integer> map(Tuple2<String, Integer> line) throws Exception {
+			Tuple3<String, String, Integer> newLine = new Tuple3<String, String, Integer>(line.f0, "even", line.f1);
+			return newLine;
 		}
-	}
+	};
+	
+	
+	public static class FilterOdd implements FilterFunction<Tuple2<String, Integer>> {
+		private static final long serialVersionUID = 1L;
 
+		public boolean filter(Tuple2<String, Integer> line) throws Exception {
+			Boolean isOdd = (Long.valueOf(line.f0.split(" ")[0]) % 2) != 0;
+			return isOdd;
+		}
+	};
+	
+	
+	public static class FilterEven implements FilterFunction<Tuple2<String, Integer>> {
+		private static final long serialVersionUID = 1L;
+
+		public boolean filter(Tuple2<String, Integer> line) throws Exception {
+			Boolean isEven = (Long.valueOf(line.f0.split(" ")[0]) % 2) == 0;
+			return isEven;
+		}
+	};
+
+
+	public static class NumberAdder implements MapFunction<String, Tuple2<String, Integer>> {
+		private static final long serialVersionUID = 1L;
+
+		public Tuple2<String, Integer> map(String line) {
+			Tuple2<String, Integer> newLine = new Tuple2<String, Integer>(line, 1);
+			return newLine;
+		}
+	};
+	
+	
+	public static class Reducer implements ReduceFunction<Tuple3<String, String, Integer>> {
+		private static final long serialVersionUID = 1L;
+
+		public Tuple3<String, String, Integer> reduce(Tuple3<String, String, Integer> line1,
+				Tuple3<String, String, Integer> line2) throws Exception {
+			Long sum = Long.valueOf(line1.f0.split(" ")[0]) + Long.valueOf(line2.f0.split(" ")[0]);
+			Long sumTS = Long.valueOf(line1.f0.split(" ")[1]) + Long.valueOf(line2.f0.split(" ")[1]);
+			Tuple3<String, String, Integer> newLine = new Tuple3<String, String, Integer>(String.valueOf(sum) +
+					" " + String.valueOf(sumTS), line1.f1, line1.f2 + line2.f2);
+			return newLine;
+		}
+	};
+
+
+	public static class AverageCalculator implements MapFunction<Tuple3<String, String, Integer>, String> {
+		private static final long serialVersionUID = 1L;
+
+		public String map(Tuple3<String, String, Integer> line) throws Exception {
+			Long average = Long.valueOf(line.f0.split(" ")[1]) / line.f2;
+			String result = String.valueOf(line.f2) + " " + String.valueOf(average);
+			return result;
+		}
+	};
+	
 	
 	public static final class TimestampAdder implements MapFunction<String, String> {
 		private static final long serialVersionUID = 1L;
@@ -87,6 +199,7 @@ public class TimestampLongKafka {
 
 			return newLine;
 		}
-	}
-
+	};
+	
 }
+
